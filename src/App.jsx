@@ -1,205 +1,189 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Header from "./Header";
-import {TbReload} from "react-icons/tb";
+import wordBank from "./Randomwords";
 
-const NumWords = 200;
-const Seconds = 10;
+const WORD_COUNT = 55;
+const DEFAULT_TIME = 30;
+
+function makeWords() {
+  return [...wordBank].sort(() => Math.random() - 0.5).slice(0, WORD_COUNT);
+}
 
 function App() {
-  const [words, setWords] = useState([]);
-  const [count, setCount] = useState(Seconds);
+  const [words, setWords] = useState(makeWords);
+  const [timeLimit, setTimeLimit] = useState(DEFAULT_TIME);
+  const [timeLeft, setTimeLeft] = useState(DEFAULT_TIME);
   const [input, setInput] = useState("");
   const [wordIndex, setWordIndex] = useState(0);
-  const [correct, setCorrect] = useState(0);
-  const [incorrect, setIncorrect] = useState(0);
-  const [status, setStatus] = useState("waiting");
+  const [results, setResults] = useState([]);
+  const [status, setStatus] = useState("idle");
   const textInput = useRef(null);
-  const [currentCharIndex, setCurrentCharIndex] = useState(-1);
-  const [currentChar, setCurrentChar] = useState("");
 
   useEffect(() => {
-    // Fetch words from an API
-    fetchWordsFromAPI().then((words) => {
-      setWords(words);
-    });
-  }, []);
-
-  useEffect(() => {
-    if (status === "started") {
-      textInput.current.focus();
-    }
-  }, [status]);
-
-  async function fetchWordsFromAPI() {
-    try {
-      const response = await fetch("http://api.quotable.io/random");
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.content) {
-          const words = data.content.split(" ").slice(0, NumWords);
-          return words;
-        } else {
-          console.error("API response is missing the 'content' property.");
-          return [];
-        }
-      } else {
-        console.error("Failed to fetch words from the API.");
-        return [];
-      }
-    } catch (error) {
-      console.error("An error occurred while fetching words from the API:", error);
-      return [];
-    }
-  }
-  function restart() {
-    window.location.reload();
-  }
-  
-  function start() {
-    if (status === "finished") {
-      // You should also reset the input field and focus it when restarting.
-      setInput("");
-      textInput.current.focus();
-      setCorrect(0);
-      setIncorrect(0);
-      setWordIndex(0);
-      setCurrentCharIndex(-1);
-      setCurrentChar("");
-    }
-  
-    setStatus("started");
-  
-    let interval = setInterval(() => {
-      setCount((prevCount) => {
-        if (prevCount === 0) {
-          setStatus("finished");
-          clearInterval(interval);
-          return Seconds;
-        } else {
-          return prevCount - 1;
-        }
-      });
-    }, 1000);
-  }
-  
-
-  function handleKeyDown(event, key) {
-    if (status !== "started") {
+    if (status !== "running") {
       return;
     }
+    const timer = setInterval(() => {
+      setTimeLeft((time) => {
+        if (time <= 1) {
+          clearInterval(timer);
+          setStatus("finished");
+          return 0;
+        }
+        return time - 1;
+      });
+    }, 1000);
 
-    if (event.keyCode === 32) {
-      checkMatch();
-      setInput("");
-      setWordIndex((prevIndex) => (prevIndex < words.length - 1 ? prevIndex + 1 : 0));
-      setCurrentCharIndex(-1);
-    } else if (event.keyCode === 8) {
-      setCurrentCharIndex((prevIndex) => (prevIndex > -1 ? prevIndex - 1 : -1));
-      setCurrentChar("");
-    }else if(event.keyCode === 16){
-      setCurrentChar("");
-      setCurrentCharIndex(-1);
-    } 
-    else {
-      setCurrentCharIndex((prevIndex) => prevIndex + 1);
-      setCurrentChar(key);
+    return () => clearInterval(timer);
+  }, [status]);
+
+  const correct = results.filter(Boolean).length;
+  const incorrect = results.filter((result) => result === false).length;
+  const accuracy = results.length ? Math.round((correct / results.length) * 100) : 100;
+  const wpm = useMemo(() => {
+    const elapsed = Math.max(timeLimit - timeLeft, 1);
+    return Math.round((correct / elapsed) * 60);
+  }, [correct, timeLimit, timeLeft]);
+
+  function reset(newTime = timeLimit) {
+    setWords(makeWords());
+    setTimeLimit(newTime);
+    setTimeLeft(newTime);
+    setInput("");
+    setWordIndex(0);
+    setResults([]);
+    setStatus("idle");
+    setTimeout(() => textInput.current?.focus(), 0);
+  }
+
+  function start() {
+    if (status === "finished") {
+      reset();
+    }
+    setStatus("running");
+    textInput.current?.focus();
+  }
+
+  function finishWord() {
+    const typedWord = input.trim();
+    if (!typedWord) {
+      return;
+    }
+    setResults((current) => [...current, typedWord === words[wordIndex]]);
+    setWordIndex((current) => current + 1);
+    setInput("");
+  }
+
+  function handleKeyDown(event) {
+    if (status !== "running") {
+      event.preventDefault();
+      return;
+    }
+    if (event.key === " ") {
+      event.preventDefault();
+      finishWord();
     }
   }
 
-  function checkMatch() {
-    const currentIndex = words[wordIndex];
-    const doesItMatch = currentIndex === input.trim();
-    if (doesItMatch) {
-      setCorrect((prevCorrect) => prevCorrect + 1);
-    } else {
-      setIncorrect((prevIncorrect) => prevIncorrect + 1);
+  function setTime(seconds) {
+    if (status === "running") {
+      return;
     }
+    reset(seconds);
   }
 
-  function getcharclass(wIndex, charIndex, char) {
-    if (wIndex < wordIndex) {
-      return "correct";
-    } else if (wIndex === wordIndex && charIndex < currentCharIndex) {
-      return "correct";
-    } else if (wIndex === wordIndex && charIndex === currentCharIndex) {
-      return char === currentChar ? "correct" : "incorrect";
-    } else {
+  function getWordClass(index) {
+    if (index === wordIndex && status === "running") {
+      return "word active";
+    }
+    if (index < results.length) {
+      return results[index] ? "word complete" : "word wrong";
+    }
+    return "word";
+  }
+
+  function getCharClass(word, char, charIndex) {
+    if (word !== words[wordIndex] || status !== "running") {
       return "";
     }
+    if (charIndex >= input.length) {
+      return "";
+    }
+    return input[charIndex] === char ? "correct" : "incorrect";
   }
 
-
   return (
-    <div className="container">
-      <div className="header-container">
-        <Header />
-      </div>
-      <div className="main-container">
-      <button className="btn-res" onClick={restart}><TbReload size={30} color="orange"/></button>
-        <div className="count">
-          <h2>{count}</h2>
-        </div>
-        <p className="p">Time</p>
-        <div className="btns">
-          <button onClick={() => (setCount(30))}>30</button>
-          <button onClick={() => (setCount(60))}>60</button>
-          <button onClick={() => (setCount(120))}>120</button>
+    <main className="app">
+      <Header />
+
+      <section className="toolbar" aria-label="typing settings">
+        <div className="mode">time</div>
+        {[15, 30, 60, 120].map((seconds) => (
+          <button
+            className={timeLimit === seconds ? "active-time" : ""}
+            key={seconds}
+            onClick={() => setTime(seconds)}
+          >
+            {seconds}
+          </button>
+        ))}
+      </section>
+
+      <section className="test-panel" onClick={start}>
+        <div className="timer">{timeLeft}</div>
+        <div className="words-container">
+          {words.map((word, i) => (
+            <span className={getWordClass(i)} key={`${word}-${i}`}>
+              {word.split("").map((char, id) => (
+                <span className={getCharClass(word, char, id)} key={id}>
+                  {char}
+                </span>
+              ))}
+              {i === wordIndex && input.length > word.length && (
+                <span className="incorrect">{input.slice(word.length)}</span>
+              )}
+            </span>
+          ))}
         </div>
         <div className="input-container">
           <input
-            disabled={status !== "started"}
+            disabled={status === "finished"}
+            placeholder={status === "running" ? "" : "click start and type here"}
             type="text"
             ref={textInput}
-            onKeyDown={(e) => handleKeyDown(e, e.key)}
+            onFocus={() => status === "idle" && start()}
+            onKeyDown={handleKeyDown}
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
         </div>
-        <div className="btn">
-          <button onClick={start}>Start</button>
-          {status === "finished" && (<button onClick={restart}>Restart</button>)}
-          {/* <button onClick={restart}>Reload</button> */}
+      </section>
+
+      <section className="actions">
+        <button onClick={start}>{status === "finished" ? "try again" : "start"}</button>
+        <button onClick={() => reset()}>reset</button>
+      </section>
+
+      <section className="results">
+        <div>
+          <span>wpm</span>
+          <strong>{status === "finished" ? wpm : "-"}</strong>
         </div>
-        {status === "started" && (
-          <div className="words-container">
-            {words.map((word, i) => (
-              <div className="words-card" key={i}>
-                {word.split("").map((char, id) => (
-                  <div key={id} className={getcharclass(i, id, char)} style={{ display: "inline" }}>
-                    {char}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {status === "finished" && (
-        <div className="section">
-          <div className="columns">
-            <div className="column1">
-              <p>WPM</p>
-              <p className="pp1">{correct}</p>
-            </div>
-            <div className="column2">
-              <p>Accuracy</p>
-              <p className="pp2">{Math.round((correct / (correct + incorrect)) * 100)}%</p>
-            </div>
-          </div>
+        <div>
+          <span>acc</span>
+          <strong>{status === "finished" ? `${accuracy}%` : "-"}</strong>
         </div>
-      )}
-    </div>
+        <div>
+          <span>correct</span>
+          <strong>{correct}</strong>
+        </div>
+        <div>
+          <span>missed</span>
+          <strong>{incorrect}</strong>
+        </div>
+      </section>
+    </main>
   );
 }
 
 export default App;
-
-
-
-
-
-
-
-
-
-
